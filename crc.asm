@@ -1,326 +1,316 @@
-SYS_READ equ 0
-SYS_WRITE equ 1
-SYS_OPEN equ 2
-SYS_CLOSE equ 3
-SYS_LSEEK equ 8
-SYS_EXIT equ 60
-STD_OUT equ 1
+
+SYS_READ    equ 0
+SYS_WRITE   equ 1
+SYS_OPEN    equ 2
+SYS_CLOSE   equ 3
+SYS_LSEEK   equ 8
+SYS_EXIT    equ 60
+STD_OUT     equ 1
 
 section .bss
-buffer: resb 65550 ; Bufor o długości 65550 bajtów.
-poly_len: resb 1 ; Długość wielomianu bez najbardziej znaczącego bitu.
-buffer_end: resd 1 ; DŁugość odczytanych danych w buforze.
-data: resb 65550 ; Bufor dodatkowy na dane.
-buffer_pos: resd 1; Aktualna pozycja w buforze.
-file_descriptor: resq 1 ; Deskryptor pliku.
-jump_buffer: resb 4 ; Bufor na przesunięcie.
-data_len: resq 1 ; Długość danych.
-polynomial: resq 1 ; Wielomian crc.
-control_sum: resb 64 ; Tu będzie wynik programu.
-
+buffer:         resb 65550 ; Buffer of 65550 bytes.
+poly_len:       resb 1     ; Length of the polynomial without the most significant bit.
+buffer_end:     resd 1     ; Length of the read data in the buffer.
+data:           resb 65550 ; Additional buffer for data.
+buffer_pos:     resd 1     ; Current position in the buffer.
+file_descriptor:resq 1     ; File descriptor.
+jump_buffer:    resb 4     ; Buffer for the offset.
+data_len:       resq 1     ; Length of the data.
+polynomial:     resq 1     ; CRC polynomial.
+control_sum:    resb 64    ; Here will be the result of the program.
 
 section .rodata
-BUFFER_LEN equ poly_len - buffer ; Długość bufora.
+BUFFER_LEN  equ poly_len - buffer ; Buffer length.
 
 section .text
     global _start
 
 _start:
-    ; Sprawdzamy poprawność argumentów.
-    mov al, byte [rsp] ; Wczytujemy liczbę argumentów.
-    cmp al, 3 ; Sprawdzamy, czy jest ich dokładnie 3 
-    ; (nazwa programu, plik, wielomian)
+    ; Check the validity of the arguments.
+    mov al, byte [rsp] ; Load the number of arguments.
+    cmp al, 3 ; Check if there are exactly 3 arguments
+    ; (program name, file, polynomial)
 
-    jne error ; Jeśli nie, to błąd.
-    mov r8, [rsp + 16] ; W r8 zapisujemy wskaźnik na nazwę pliku.
-    mov r9, [rsp + 24] ; W r9 zapisujemy wskaźnik na wielomian crc.
+    jne error ; If not, an error.
+    mov r8, [rsp + 16] ; In r8, we save the pointer to the file name.
+    mov r9, [rsp + 24] ; In r9, we save the pointer to the CRC polynomial.
 
-    xor rcx, rcx ; Zerujemy licznik.
-    xor r15, r15 ; W r15 będziemy trzymać wielomian crc.
-    test rsp, 15 ; Sprawdzamy, czy stos jest wyrównany do 16 bajtów.
-    jz validate_polynomial ; Jeśli tak, to wczytujemy wielomian.
-    and rsp, -16 ; Wyrównujemy stos do 16 bajtów.
+    xor rcx, rcx ; Clear the counter.
+    xor r15, r15 ; r15 will hold the CRC polynomial.
+    test rsp, 15 ; Check if the stack is aligned to 16 bytes.
+    jz validate_polynomial ; If yes, we read the polynomial.
+    and rsp, -16 ; Align the stack to 16 bytes.
 
-; Sprawdzamy poprawność wielomianu i jak jest poprawny to wczytujemy do r15.
+; Check if the polynomial is valid and load it into r15 if it is.
 validate_polynomial: 
-    mov al, byte [r9 + rcx] ; Wczytujemy kolejny bajt wielomianu.
-    inc rcx ; Zwiększamy licznik.
-    test al, al ; Sprawdzamy, czy to koniec wielomianu (bajt zerowy).
-    jz open_file ; Jeśli tak, to wielomian jest poprawny.
+    mov al, byte [r9 + rcx] ; Load the next byte of the polynomial.
+    inc rcx ; Increase the counter.
+    test al, al ; Check if it's the end of the polynomial (zero byte).
+    jz open_file ; If yes, the polynomial is valid.
 
-    cmp rcx, 64 ; Sprawdzamy, czy wczytaliśmy więcej niż 64 bajty wielomianu.
-    ja error ; Jeśli tak, to błąd, bo wielomian jest za długi.
+    cmp rcx, 64 ; Check if we loaded more than 64 bytes of the polynomial.
+    ja error ; If yes, an error because the polynomial is too long.
 
-    cmp al, '0' ; Sprawdzamy, czy to 0.
+    cmp al, '0' ; Check if it's 0.
     je current_zero
 
-    cmp rax, '1' ; Sprawdzamy, czy to 1.
+    cmp rax, '1' ; Check if it's 1.
     je current_one
 
-    jmp error ; W przeciwnym wypadku błąd
+    jmp error ; Otherwise, an error.
 
-current_zero: ; jesli wczytany bajt to 0
-    shl r15, 1 ; Uzupełniamy wielomian zerem z lewej strony.
-    jmp validate_polynomial ; Wczytujemy kolejny bajt wielomianu.
+current_zero: ; If the loaded byte is 0
+    shl r15, 1 ; Shift the polynomial left by 1 and append a zero.
+    jmp validate_polynomial ; Load the next byte of the polynomial.
 
-current_one: ; jesli wczytany bajt to 1
-    shl r15, 1 ; Uzupełniamy wielomian zerem z lewej strony.
-    or r15, 1 ; Ustawiamy najmniej znaczący bit na 1.
-    jmp validate_polynomial ; Wczytujemy kolejny bajt wielomianu.
+current_one: ; If the loaded byte is 1
+    shl r15, 1 ; Shift the polynomial left by 1 and append a zero.
+    or r15, 1 ; Set the least significant bit to 1.
+    jmp validate_polynomial ; Load the next byte of the polynomial.
 
-open_file:; Otwieramy plik.
-    mov [rel polynomial], r15 ; Zapisujemy wielomian crc.
-    xor r15, r15 ; Od tego momentu r15 będzie naszym rejestrem
-    ; tymczasowym do obliczenia sumy kontrolnej.
-    dec cl ; Zmniejszamy licznik, bo wczytaliśmy bajt zerowy.
-    test cl, cl ; Sprawdzamy, czy wielomian jest pusty.
-    jz error ; Jeśli tak, to błąd.
-    mov [rel poly_len], cl ; Zapisujemy długość wielomianu.
+open_file: ; Open the file.
+    mov [rel polynomial], r15 ; Save the CRC polynomial.
+    xor r15, r15 ; From now on, r15 will be our temporary register for checksum calculation.
+    dec cl ; Decrease the counter because we loaded the zero byte.
+    test cl, cl ; Check if the polynomial is empty.
+    jz error ; If yes, an error.
+    mov [rel poly_len], cl ; Save the polynomial length.
 
     mov rax, SYS_OPEN
-    mov rdi, r8 ; Nazwa pliku.
-    mov rsi, 0 ; Odczyt.
+    mov rdi, r8 ; File name.
+    mov rsi, 0 ; Read-only.
     syscall
 
-    test rax, rax ; Sprawdzamy, czy otwarcie się powiodło.
-    js error ; Jeśli nie, to błąd.
+    test rax, rax ; Check if opening succeeded.
+    js error ; If not, an error.
 
-    mov rdi, rax ; W rdi zapisujemy deskryptor pliku.
-    mov [rel file_descriptor], rdi ; Zapisujemy deskryptor pliku.
+    mov rdi, rax ; Save the file descriptor in rdi.
+    mov [rel file_descriptor], rdi ; Save the file descriptor.
     call read_file
     jmp read_data_length
 
-read_file: ; Odczytujemy dane z pliku.
+read_file: ; Read data from the file.
     mov rax, SYS_READ 
     lea rsi, [rel buffer] 
     mov rdi, [rel file_descriptor] 
     mov rdx, BUFFER_LEN 
     syscall
 
-    test rax, rax ; Sprawdzamy, czy odczyt się powiódł.
-    js error ; Jeśli nie, to błąd.
-    jz error ; Jeśli odczytano 0 bajtów, to błąd.
-    mov [rel buffer_end], eax ; W rax jest długość odczytanych danych.
+    test rax, rax ; Check if the read was successful.
+    js error ; If not, an error.
+    jz error ; If 0 bytes were read, it's an error.
+    mov [rel buffer_end], eax ; Save the length of the read data in rax.
     ret
 
-read_data_length: ; Odczytujemy długość danych z bufora.
-    lea r12, [rel buffer] ; W r12 zapisujemy wskaźnik na początek bufora.
+read_data_length: ; Read the length of the data from the buffer.
+    lea r12, [rel buffer] ; Save the pointer to the start of the buffer in r12.
     mov r13d, [rel buffer_pos] 
     xor rbx, rbx
-    mov bl, byte [r12 + r13] ; Wczytujemy młodsze bity długości danych.
-    inc dword [rel buffer_pos] ; Zwiększamy pozycję w buforze.
-    inc r13; Zwiększamy pozycję w buforze.
-    cmp r13d, [rel buffer_end] ; Sprawdzamy, czy skończył się bufor.
-    jb read_data_length2 ; Jeśli nie, to wczytujemy dane.
-    xor r13, r13; Zerujemy pozycję w buforze jeśli skończył się bufor.
-    mov [rel buffer_pos], r13d ; Zapisujemy pozycję w buforze.
-    call read_file ; Jeśli tak, to wczytujemy kolejny fragment.
+    mov bl, byte [r12 + r13] ; Load the lower bits of the data length.
+    inc dword [rel buffer_pos] ; Increase the buffer position.
+    inc r13; Increase the buffer position.
+    cmp r13d, [rel buffer_end] ; Check if the buffer is empty.
+    jb read_data_length2 ; If not, load the data.
+    xor r13, r13; Reset the buffer position if the buffer is empty.
+    mov [rel buffer_pos], r13d ; Save the buffer position.
+    call read_file ; If yes, load the next segment.
 
-read_data_length2: ; Wczytujemy starsze bity długości danych.
-    movzx r14, bx ; W r14 zapisujemy długość danych w fragmencie.
-    mov bl, byte [r12 + r13] ; Wczytujemy długość danych w fragmencie.
-    shl bx, 8 ; Przesuwamy starsze bity długości danych.
-    add bx, r14w ; Dodajemy młodsze bity długości danych.
-    ; Teraz w bx mamy długość danych w fragmencie w big-endian NKB.
+read_data_length2: ; Load the higher bits of the data length.
+    movzx r14, bx ; Save the data length in fragment in r14.
+    mov bl, byte [r12 + r13] ; Load the higher bits of the data length.
+    shl bx, 8 ; Shift the higher bits left.
+    add bx, r14w ; Add the lower bits of the data length.
+    ; Now bx contains the data length in the fragment in big-endian NKB.
     movzx r14, bx
-    mov [rel data_len], r14 ; Zapisujemy długość danych w zmiennej data_len.
-    inc dword [rel buffer_pos] ; Zwiększamy pozycję w buforze.
+    mov [rel data_len], r14 ; Save the data length in the variable data_len.
+    inc dword [rel buffer_pos] ; Increase the buffer position.
 
-read_data: ; Odczytujemy dane z danego fragmentu. Możliwe, że trzeba będzie wczytać kolejny fragment.
-    xor r10, r10 ; Zerujemy licznik.
-    lea r8, [rel data] ; W r8 zapisujemy wskaźnik na bufor danych.
-    lea r9, [rel buffer] ; W r9 zapisujemy wskaźnik na bufor.
-    mov r13d, [rel buffer_pos] ; W r13 zapisujemy pozycję w buforze.
-    movzx rdx, bx ; W rdx zapisujemy długość danych w fragmencie.
-    add edx, [rel buffer_pos] ; Dodajemy długość danych w fragmencie do pozycji w buforze.
-    xor rcx, rcx ; Zerujemy licznik.
-    cmp edx, [rel buffer_end] ; Sprawdzamy, czy dane mieszczą się w buforze.
-    jb copy_data ; Jeśli tak, to wczytujemy dane.
-    ; Jeśli nie, dane nie zmieściły się w buforze i trzeba odczytać ponownie plik.
+read_data: ; Read data from the current segment. May need to read the next segment.
+    xor r10, r10 ; Clear the counter.
+    lea r8, [rel data] ; Save the pointer to the data buffer in r8.
+    lea r9, [rel buffer] ; Save the pointer to the buffer in r9.
+    mov r13d, [rel buffer_pos] ; Save the buffer position in r13.
+    movzx rdx, bx ; Save the data length in fragment in rdx.
+    add edx, [rel buffer_pos] ; Add the data length in fragment to the buffer position.
+    xor rcx, rcx ; Clear the counter.
+    cmp edx, [rel buffer_end] ; Check if the data fits in the buffer.
+    jb copy_data ; If yes, load the data.
+    ; If not, the data does not fit in the buffer and the file needs to be read again.
 
-read_loop: ; kopujemy pierwszy fragment do bufora danych
-    mov al, [r9 + r13] ; Wczytujemy dane.
-    mov [r8 + r10], al ; Zapisujemy dane.
-    inc r10 ; Zwiększamy licznik.
-    inc r13 ; Zwiększamy pozycję w buforze.
-    cmp r13d, [rel buffer_end] ; Sprawdzamy, czy skończył się bufor.
-    jb read_loop ; Jeśli nie, to wczytujemy kolejne dane.
-    call read_file ; Wczytujemy kolejny fragment.
+read_loop: ; Copy the first segment to the data buffer
+    mov al, [r9 + r13] ; Load the data.
+    mov [r8 + r10], al ; Save the data.
+    inc r10 ; Increase the counter.
+    inc r13 ; Increase the buffer position.
+    cmp r13d, [rel buffer_end] ; Check if the buffer is empty.
+    jb read_loop ; If not, load the next data.
+    call read_file ; Load the next segment.
 
+    movzx rbx, bx ; Save the data length in fragment in rbx.
+    sub rbx, r10 ; Subtract the loaded data from the data length in fragment.
+    add r8, r10 ; Move the data pointer.
+    xor r13, r13 ; Clear the buffer position.
+    mov [rel buffer_pos], r13d ; Save the buffer position.
+    xor rcx, rcx ; Clear the counter.
+    ; Now in r8, we have the pointer to the free space in the data,
+    ; where we will write the next part of the data.
 
-    movzx rbx, bx ; W rbx zapisujemy długość danych w fragmencie.
-    sub rbx, r10 ; Odejmujemy wczytane dane od długości danych w fragmencie.
-    add r8, r10 ; Przesuwamy wskaźnik na dane.
-    xor r13, r13 ; Zerujemy pozycję w buforze.
-    mov [rel buffer_pos], r13d ; Zapisujemy pozycję w buforze.
-    xor rcx, rcx ; Zerujemy licznik.
-    ; w tej chwili r8 mamy wskaznik na wolne miejsce w danych, 
-    ; gdzie będziemy zapisywali dalszą część danych.
-
-
-copy_data: ; kopiujemy dane z fragmentu do bufora danych
-    test rbx, rbx ; Sprawdzamy, czy dane są puste.
-    jz read_jump ; Jeśli tak, to wczytujemy przesunięcie.
+copy_data: ; Copy the data from the segment to the data buffer.
+    test rbx, rbx ; Check if the data is empty.
+    jz read_jump ; If yes, load the offset.
 copy_data_loop:
-    mov al, [r9 + r13] ; Wczytujemy dane.
-    mov [r8 + rcx], al ; Zapisujemy dane.
-    inc rcx ; Zwiększamy licznik.
-    inc r13 ; Zwiększamy pozycję w buforze.
-    cmp rcx, rbx ; Sprawdzamy, czy wczytaliśmy dane w fragmencie.
-    jb copy_data_loop ; Jeśli nie, to wczytujemy kolejne dane.
-    mov [rel buffer_pos], r13d ; Zapisujemy pozycję w buforze.  
-
-
+    mov al, [r9 + r13] ; Load the data.
+    mov [r8 + rcx], al ; Save the data.
+    inc rcx ; Increase the counter.
+    inc r13 ; Increase the buffer position.
+    cmp rcx, rbx ; Check if all data in the fragment is loaded.
+    jb copy_data_loop ; If not, load the next data.
+    mov [rel buffer_pos], r13d ; Save the buffer position.  
 calculate_crc:
-    ; Obliczanie sumy kontrolnej wygląda następująco:
-    ; 1. Rejestr r15 jest rejestrem do którego będziemy wrzucali
-    ;  od prawej strony bit po bicie dane robiąc shift left.
-    ; W r12 będziemy trzymali wielomian crc (bez najbardziej znaczącego bitu) 
-    ; przesunięty o odpowiednią ilość bitów w lewo, 
-    ; tak żeby był przyklejony do lewej strony r12.
-    ; W r10b trzymamy długość wielomianu crc w r12.
-    ; 2. Jeśli w r15 nastąpi przeniesienie (czyli najbardziej znaczący
-    ; bit był równy 1), to wykonujemy operację xor z r12 (wielomianem crc).
-    ; 3. Powtarzamy operację dla wszystkich bitów w danych.
-    ; 4. Na końcu programu, jak dane się skończą, to robimy 
-    ; shift left 64 - poly_len razy, a po każdym shifcie sprawdzamy,
-    ; czy było przeniesienie i jeśli tak, to xorujemy.
-    ; 5. Na końcu w r15 mamy sumę kontrolną.
+    ; The calculation of the checksum is as follows:
+    ; 1. The r15 register is used to store the data bit by bit
+    ;    from the right, shifting left with each bit.
+    ; We will store the CRC polynomial (without the most significant bit)
+    ;    in r12, shifted left by the necessary amount so that it's aligned
+    ;    to the left side of r12.
+    ; The r10b register will store the length of the CRC polynomial in r12.
+    ; 2. If there is a carry in r15 (meaning the most significant bit was 1),
+    ;    we perform a XOR operation with r12 (the CRC polynomial).
+    ; 3. We repeat the operation for all the bits in the data.
+    ; 4. At the end of the program, when the data is finished,
+    ;    we perform a shift left 64 - poly_len times, checking for a carry after each shift,
+    ;    and if there is a carry, we XOR.
+    ; 5. In the end, r15 contains the checksum.
 
     mov r10b, [rel poly_len] 
     mov r12, [rel polynomial] 
-    mov cl, 64 ; Maksymalna długość wielomianu crc.
-    sub cl, r10b ; Odejmujemy długość wielomianu crc od 64.
-    shl r12, cl ; Przyklejamy wielomian crc do lewej strony r12.
-    mov rcx, [rel data_len] ; Długość danych.
-    test rcx, rcx ; Sprawdzamy, czy dane są puste.
-    jz read_jump ; Jeśli tak, to wczytujemy przesunięcie.
+    mov cl, 64 ; The maximum length of the CRC polynomial.
+    sub cl, r10b ; Subtract the length of the CRC polynomial from 64.
+    shl r12, cl ; Align the CRC polynomial to the left side of r12.
+    mov rcx, [rel data_len] ; Length of the data.
+    test rcx, rcx ; Check if the data is empty.
+    jz read_jump ; If so, read the offset.
 
-    lea r8, [rel data] ; W r8 zapisujemy wskaźnik na dane.
-    xor r11, r11 ; R11 wskazuje na pierwszy bajt danych.
-    mov bl, 8 ; W bl zapisujemy 8, bo tyle bitów w bajcie.
-    mov al, [r8 + r11] ; Wczytujemy pierwszy bajt danych.
+    lea r8, [rel data] ; r8 stores the pointer to the data.
+    xor r11, r11 ; r11 points to the first byte of data.
+    mov bl, 8 ; Store 8 in bl, as there are 8 bits in a byte.
+    mov al, [r8 + r11] ; Load the first byte of data.
 
-calculate_crc_loop: ; Pętla obliczająca sumę kontrolną.
-    test bl, bl ; Sprawdzamy, czy skończyły się bity w bajcie.
-    jz next_byte ; Jeśli tak, to wczytujemy kolejny bajt.
-    shl al, 1 ; Przesuwamy bity w lewo.
-    rcl r15, 1 ; Wrzucamy bit do r15 i robimy shift left.
-    jnc post_xor ; Jeśli nie było przeniesienia, to nie robimy xor.
-    xor r15, r12 ; Robimy xor z wielomianem crc.
+calculate_crc_loop: ; The loop that calculates the checksum.
+    test bl, bl ; Check if there are no more bits in the byte.
+    jz next_byte ; If so, load the next byte.
+    shl al, 1 ; Shift the bits to the left.
+    rcl r15, 1 ; Insert a bit into r15 and perform a shift left.
+    jnc post_xor ; If there was no carry, no XOR is performed.
+    xor r15, r12 ; Perform XOR with the CRC polynomial.
 
-post_xor: ; Po xorze (lub braku przeniesienia).
-    dec bl ; Zmniejszamy licznik bitów w bajcie.
+post_xor: ; After XOR (or no carry).
+    dec bl ; Decrease the bit counter in the byte.
     jmp calculate_crc_loop
 
 next_byte:
-    inc r11 ; Zwiększamy wskaźnik na dane.
-    cmp r11, rcx ; Sprawdzamy, czy skończyły się dane.
-    je read_jump ; Jeśli tak, to wczytujemy przesunięcie.
-    mov bl, 8 ; W bl zapisujemy 8, bo tyle bitów w bajcie.
-    mov al, [r8 + r11] ; Wczytujemy kolejny bajt danych.
+    inc r11 ; Increment the data pointer.
+    cmp r11, rcx ; Check if all data has been processed.
+    je read_jump ; If so, read the offset.
+    mov bl, 8 ; Store 8 in bl, as there are 8 bits in a byte.
+    mov al, [r8 + r11] ; Load the next byte of data.
     jmp calculate_crc_loop
 
-read_jump: ; Czytamy przesunięcie w danym fragmencie.
-    lea r8, [rel jump_buffer] ; W r8 zapisujemy wskaźnik na bufor na przesunięcie.
+read_jump: ; Read the offset in the current fragment.
+    lea r8, [rel jump_buffer] ; r8 stores the pointer to the jump buffer.
     xor r14, r14
-    mov eax, [rel buffer_end] ; W rax zapisujemy długość bufora.
-    sub rax, r13 ; W rax zapisujemy ile bajtów 
-    ; jeszcze nie przeczytaliśmy z bufora.
-    cmp rax, 4 ; Sprawdzamy, czy przesunięcie mieści się w buforze.
-    jae save_jump2 ; Jeśli tak, to wczytujemy przesunięcie.
-    ; Jeśli nie, to trzeba zapisać bajty, które 
-    ; się mieszczą i odczytać na nowo plik.
+    mov eax, [rel buffer_end] ; Store the buffer length in rax.
+    sub rax, r13 ; Store the number of bytes not yet read from the buffer.
+    cmp rax, 4 ; Check if the offset fits in the buffer.
+    jae save_jump2 ; If so, read the offset.
+    ; If not, save the bytes that fit and re-read the file.
 
-save_jump: ; Zapisujemy kolejne bajty przesunięcia w jump_buffer.
-    mov [buffer_pos], r14d ; Wyzerowujemy pozycję w buforze.
-    ; (jest to potrzebne do read_jump2)
+save_jump: ; Save subsequent offset bytes into the jump_buffer.
+    mov [buffer_pos], r14d ; Zero out the buffer position.
+    ; (this is needed for read_jump2)
 
-    cmp rax, 0 ; Sprawdzamy, czy bufor się skończył.
-    je read_jump2 ; Jeśli tak, to wczytujemy kolejny fragment.
-    mov bl, [r9 + r13] ; Wczytujemy bajt przesunięcia.
-    mov [r8 + r14], bl ; Zapisujemy bajt przesunięcia.
-    inc r14 ; Zwiększamy indeks bajtu przesunięcia.
-    inc r13 ; Zwiększamy pozycję w buforze.
-    dec rax ; Zmniejszamy licznik.
+    cmp rax, 0 ; Check if the buffer is empty.
+    je read_jump2 ; If so, read the next fragment.
+    mov bl, [r9 + r13] ; Load the offset byte.
+    mov [r8 + r14], bl ; Save the offset byte.
+    inc r14 ; Increment the offset byte index.
+    inc r13 ; Increment the buffer position.
+    dec rax ; Decrease the counter.
     jmp save_jump 
 
 read_jump2: 
-    call read_file ; Wczytujemy kolejny fragment.
+    call read_file ; Read the next fragment.
 
-save_jump2: ; Chcemy zapisać przesunięcie w jump_buffer.
-    mov r13d, [rel buffer_pos] ; W r13d zapisujemy pozycję w buforze.
+save_jump2: ; Save the offset into the jump_buffer.
+    mov r13d, [rel buffer_pos] ; Store the buffer position in r13d.
 
-; Zapisujemy przesunięcie w jump_buffer, a następnie w r14.
+; Save the offset in the jump_buffer, then in r14.
 save_jump_loop: 
-    mov bl, [r9 + r13] ; Wczytujemy bajt przesunięcia z bufora.
-    mov [r8 + r14], bl ; Zapisujemy bajt przesunięcia do jump_buffer.
-    inc r14 ; Zwiększamy indeks bajtu przesunięcia.
-    inc r13 ; Zwiększamy pozycję w buforze.
-    cmp r14, 4 ; Sprawdzamy, czy wczytaliśmy 4 bajty przesunięcia.
-    jb save_jump_loop ; Jeśli nie, to wczytujemy kolejne bajty przesunięcia.
-    mov r14d, dword [rel jump_buffer] ; W r14 zapisujemy przesunięcie.
-    movsxd r14, r14d ; W r14 zapisujemy przesunięcie w 64 bitach.
-    mov [rel buffer_pos], r13d ; Zapisujemy pozycję w buforze.
+    mov bl, [r9 + r13] ; Load the offset byte from the buffer.
+    mov [r8 + r14], bl ; Save the offset byte into the jump_buffer.
+    inc r14 ; Increment the offset byte index.
+    inc r13 ; Increment the buffer position.
+    cmp r14, 4 ; Check if we've read 4 offset bytes.
+    jb save_jump_loop ; If not, load the next offset bytes.
+    mov r14d, dword [rel jump_buffer] ; Store the offset in r14.
+    movsxd r14, r14d ; Store the offset in 64 bits in r14.
+    mov [rel buffer_pos], r13d ; Save the buffer position.
 
-jump_next: ; Robimy przesunięcie do następnego fragmentu.
-    
-    mov rdx, [rel data_len] ; W rdx zapisujemy długość danych.
+jump_next: ; Perform the jump to the next fragment.
+
+    mov rdx, [rel data_len] ; Store the data length in rdx.
     neg rdx
-    sub rdx, 6 ; Odejmujemy 6 bajtów (2 bajty długości danych i 4 bajty przesunięcia).
-    cmp r14, rdx ; Sprawdzamy, czy przesunięcie jest na samego siebie.
-    je end ; Jeśli tak, to to jest ostatni fragment.
+    sub rdx, 6 ; Subtract 6 bytes (2 bytes for data length and 4 bytes for the offset).
+    cmp r14, rdx ; Check if the offset refers to itself.
+    je end ; If so, this is the last fragment.
 
-    add r13d, r14d ; Dodajemy przesunięcie do pozycji w buforze.
-    jo jump_out_of_buffer ; Jeśli nastąpił overflow, to trzeba odczytać ponownie plik.
-    cmp r13d, [rel buffer_end] ; Sprawdzamy, czy przesunięcie mieści 
-    ; się w górnej grancy bufora.
-    jae jump_out_of_buffer ; Jeśli nie, to trzeba odczytać ponownie plik.
-    cmp r13, 0 ; Sprawdzamy, czy przesunięcie mieści 
-    ; się w dolnej grancy bufora.
-    jl jump_out_of_buffer ; Jeśli nie, to trzeba odczytać ponownie plik.
-    mov [rel buffer_pos], r13d ; Zapisujemy pozycję w buforze.
-    jmp read_data_length ; Jeśli nie, to wczytujemy długość danych kolejnego fragmentu.
+    add r13d, r14d ; Add the offset to the buffer position.
+    jo jump_out_of_buffer ; If overflow occurs, re-read the file.
+    cmp r13d, [rel buffer_end] ; Check if the offset is within the upper bounds of the buffer.
+    jae jump_out_of_buffer ; If not, re-read the file.
+    cmp r13, 0 ; Check if the offset is within the lower bounds of the buffer.
+    jl jump_out_of_buffer ; If not, re-read the file.
+    mov [rel buffer_pos], r13d ; Save the buffer position.
+    jmp read_data_length ; If not, read the data length of the next fragment.
 
-jump_out_of_buffer: ; Przesunięcie wychodzi poza bufor.
-    mov r13d, [rel buffer_pos] ; W r13 zapisujemy pozycję w buforze.
+jump_out_of_buffer: ; The offset is outside the buffer.
+    mov r13d, [rel buffer_pos] ; Store the buffer position in r13.
     xor rax, rax
-    mov eax, [rel buffer_end] ; W rax zapisujemy długość danych w buforze.
-    sub rax, r13 ; Odejmujemy pozycję w buforze od długości danych w buforze.
-    sub r14, rax ; Odejmujemy długość danych w buforze od przesunięcia.
+    mov eax, [rel buffer_end] ; Store the buffer length in rax.
+    sub rax, r13 ; Subtract the buffer position from the buffer length.
+    sub r14, rax ; Subtract the buffer length from the offset.
     mov rax, SYS_LSEEK
     mov rdi, [rel file_descriptor]
-    mov rsi, r14 ; Przesunięcie.
-    mov rdx, 1 ; Skąd przesuwamy.
+    mov rsi, r14 ; The offset.
+    mov rdx, 1 ; From where to move.
     syscall
-    test rax, rax ; Sprawdzamy, czy przesunięcie się powiodło.
-    js error ; Jeśli nie, to błąd.
-    call read_file ; Wczytujemy kolejny fragment.
-    xor r13, r13 ; Zerojemy pozycję w buforze.
-    mov [rel buffer_pos], r13d ; Zapisujemy pozycję 0 w buforze.
-    jmp read_data_length ; Wczytujemy długość danych kolejnego fragmentu.
+    test rax, rax ; Check if the offset operation succeeded.
+    js error ; If not, it's an error.
+    call read_file ; Read the next fragment.
+    xor r13, r13 ; Zero out the buffer position.
+    mov [rel buffer_pos], r13d ; Save position 0 in the buffer.
+    jmp read_data_length ; Read the data length of the next fragment.
 
-
-end: ; zakończenie programu
-    ; Trzeba dokończyć liczenie sumy kontrolnej z r15.
-    mov r10b, [rel poly_len] ; Długość wielomianu crc.
-    mov r12, [rel polynomial] ; Wielomian crc.
-    mov cl, 64 ; Maksymalna długość wielomianu crc.
-    sub cl, r10b ; Odejmujemy długość wielomianu crc od 64.
-    shl r12, cl ; Przyklejamy wielomian crc do lewej strony r12.
-    mov cl, 64 ; Licznik, ile razy musimy zrobić shift left.
-control_sum_loop: ; Pętla obliczająca sumę kontrolną.
+end: ; End of the program.
+    ; Finalize calculating the checksum from r15.
+    mov r10b, [rel poly_len] ; Length of the CRC polynomial.
+    mov r12, [rel polynomial] ; CRC polynomial.
+    mov cl, 64 ; Maximum length of the CRC polynomial.
+    sub cl, r10b ; Subtract the length of the CRC polynomial from 64.
+    shl r12, cl ; Align the CRC polynomial to the left side of r12.
+    mov cl, 64 ; Counter for how many times to shift left.
+control_sum_loop: ; Loop calculating the checksum.
     test cl, cl
     jz save_crc
-    shl r15, 1 ; Przesuwamy bity w lewo.
-    jnc control_sum_post_xor ; Jeśli nie było przeniesienia, to nie robimy xor.
-    xor r15, r12 ; Robimy xor z wielomianem crc.
+    shl r15, 1 ; Shift the bits to the left.
+    jnc control_sum_post_xor ; If there was no carry, no XOR is performed.
+    xor r15, r12 ; Perform XOR with the CRC polynomial.
 
-control_sum_post_xor: ; Po xorze (lub braku przeniesienia).
-    dec cl ; Zmniejszamy licznik.
+control_sum_post_xor: ; After XOR (or no carry).
+    dec cl ; Decrease the counter.
     jmp control_sum_loop
 
-save_crc: ; Zapisujemy sumę kontrolną.
+save_crc: ; Save the checksum.
     lea rax, [rel control_sum]
     xor rcx, rcx
 save_crc_loop:
@@ -337,37 +327,35 @@ carry_flag:
     mov byte [rax + rcx], '1'
     inc rcx
     jmp save_crc_loop
-
 write_result:
-    mov byte [rax + rcx], 10 ; Znak nowej linii.
-    inc rcx ; Liczba bajtów w sumie kontrolnej.
+    mov byte [rax + rcx], 10 ; Newline character.
+    inc rcx ; Number of bytes in the checksum.
     mov rax, SYS_WRITE 
     mov rdi, STD_OUT 
-    lea rsi, [rel control_sum] ; Suma kontrolna.
-    mov rdx, rcx ; Długość sumy kontrolnej.
+    lea rsi, [rel control_sum] ; The checksum.
+    mov rdx, rcx ; Length of the checksum.
     syscall
-    test rax, rax ; Sprawdzamy, czy zapis się powiódł.
-    js error ; Jeśli nie, to błąd.
-    ; Jeśli tak, to zamykamy plik i kończymy program.
-    jz error ; Jeśli zapisano 0 bajtów, to błąd.
+    test rax, rax ; Check if the write operation succeeded.
+    js error ; If not, it's an error.
+    ; If successful, close the file and end the program.
+    jz error ; If 0 bytes were written, it's an error.
 
     mov rax, SYS_CLOSE 
     mov rdi, [rel file_descriptor]
     syscall
-    test rax, rax ; Sprawdzamy, czy zamknięcie pliku się powiodło.
+    test rax, rax ; Check if the file was successfully closed.
     js exit
 
     mov rax, SYS_EXIT 
-    xor rdi, rdi ; Kod wyjścia 0.
+    xor rdi, rdi ; Exit code 0.
     syscall
 
-
-error: ; Zamykamy plik, bo wystąpił błąd.
+error: ; Close the file because an error occurred.
     mov rax, SYS_CLOSE 
     mov rdi, [file_descriptor] 
     syscall
     
-exit: ; Wyjście z programu.
+exit: ; Exit the program.
     mov rax, SYS_EXIT 
-    mov rdi, 1 ; Kod błędu.
+    mov rdi, 1 ; Error code.
     syscall
